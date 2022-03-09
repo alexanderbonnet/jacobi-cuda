@@ -2,58 +2,58 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define N 512
+#define N (2048 * 2048)
+#define THREADS_PER_BLOCK 512
 
-double* init_x(double value) {
-    double* x_vect = malloc(sizeof(double) * N);
-    for (int i = 0; i < size; i++) {
+double *init_x(double value) {
+    double *x_vect = (double *)malloc(sizeof(double) * N);
+    for (int i = 0; i < N; i++) {
         x_vect[i] = value;
     }
     return x_vect;
 }
 
-__global__ squared_norm_of_diff(double* a_vec, double* b_vec, double* c,
-                                int size) {
-    __shared__ int temp[size];
-    double diff = a[threadIdx.x] - b[threadIdx.x];
+__global__ void dot(double *a, double *b, double *c) {
+    __shared__ double temp[THREADS_PER_BLOCK];
+    int index = threadIdx.x + blockIdx.x * blockDim.x;
+    temp[threadIdx.x] = a[index] * b[index];
+
+    __syncthreads();
+
+    if (0 == threadIdx.x) {
+        double sum = 0;
+        for (int i = 0; i < THREADS_PER_BLOCK; i++) sum += temp[i];
+        atomicAdd(c, sum);
+    }
+}
+
+__global__ void squared_norm_of_diff(double *a, double *b, double *c) {
+    __shared__ double temp[THREADS_PER_BLOCK];
+    int index = threadIdx.x + blockIdx.x * blockDim.x;
+    double diff = a[index] - b[index];
     temp[threadIdx.x] = diff * diff;
 
     __syncthreads();
 
     if (0 == threadIdx.x) {
         double sum = 0;
-        for (int i = 0; i < size; i++) {
-            sum += temp[i];
-        }
-        *c = sum;
-    }
-}
-
-__global__ void dot(double* a, double* b, double* c) {
-    __shared__ int temp[size];
-    temp[threadIdx.x] = a[threadIdx.x] * b[threadIdx.x];
-    __syncthreads();
-    if (0 == threadIdx.x) {
-        double sum = 0;
-        for (int i = 0; i < size; i++) {
-            sum += temp[i];
-        }
-        *c = sum;
+        for (int i = 0; i < THREADS_PER_BLOCK; i++) sum += temp[i];
+        atomicAdd(c, sum);
     }
 }
 
 int main(void) {
-    int *a, *b, *c;
-    int *dev_a, *dev_b, *dev_c;
-    int size = N * sizeof(double);
+    double *a, *b, *c;
+    double *dev_a, *dev_b, *dev_c;
+    double size = N * sizeof(double);
 
-    cudaMalloc((void**)&dev_a, size);
-    cudaMalloc((void**)&dev_b, size);
-    cudaMalloc((void**)&dev_c, sizeof(double));
+    cudaMalloc((void **)&dev_a, size);
+    cudaMalloc((void **)&dev_b, size);
+    cudaMalloc((void **)&dev_c, sizeof(double));
 
-    a = (double*)malloc(size);
-    b = (double*)malloc(size);
-    c = (double*)malloc(sizeof(double));
+    a = (double *)malloc(size);
+    b = (double *)malloc(size);
+    c = (double *)malloc(sizeof(double));
 
     a = init_x(1.0);
     b = init_x(2.0);
@@ -63,10 +63,13 @@ int main(void) {
     cudaMemcpy(dev_b, b, size, cudaMemcpyHostToDevice);
 
     // launch dot() kernel with 1 block and N threads
-    dot<<<1, N>>>(dev_a, dev_b, dev_c);
+    squared_norm_of_diff<<<N / THREADS_PER_BLOCK, THREADS_PER_BLOCK>>>(
+        dev_a, dev_b, dev_c);
 
     // copy device result back to host copy of c
     cudaMemcpy(c, dev_c, sizeof(double), cudaMemcpyDeviceToHost);
+
+    printf("%f\n", *c);
 
     free(a);
     free(b);
