@@ -4,10 +4,19 @@
 #include <sys/time.h>
 
 #define N 2048
-#define THREADS_PER_BLOCK 512
+#define THREADS_PER_BLOCK 32
+#define N_BLOCKS (N / THREADS_PER_BLOCK)
+#define ELEMENT float
 
-double mean(double *x_array, int size) {
-    double mean = 0;
+__global__ void warm_up_gpu() {
+    unsigned int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    float ia, ib;
+    ia = ib = 0.0f;
+    ib += ia + tid;
+}
+
+ELEMENT mean(ELEMENT *x_array, int size) {
+    ELEMENT mean = 0;
     for (int i = 0; i < size; i++) {
         mean += x_array[i];
     }
@@ -15,18 +24,18 @@ double mean(double *x_array, int size) {
     return mean;
 }
 
-double *init_x(int size, double value) {
-    double *x_vect = (double *)malloc(sizeof(double) * size);
-    for (int i = 0; i < size; i++) {
+ELEMENT *init_x(unsigned int size, ELEMENT value) {
+    ELEMENT *x_vect = (ELEMENT *)malloc(sizeof(ELEMENT) * size);
+    for (unsigned int i = 0; i < size; i++) {
         x_vect[i] = value;
     }
     return x_vect;
 }
 
-double *init_a(int size) {
-    double *a_matrix = (double *)malloc(sizeof(double) * size * size);
-    for (int i = 0; i < size; i++) {
-        for (int j = 0; j < size; j++) {
+ELEMENT *init_a(unsigned int size) {
+    ELEMENT *a_matrix = (ELEMENT *)malloc(sizeof(ELEMENT) * size * size);
+    for (unsigned int i = 0; i < size; i++) {
+        for (unsigned int j = 0; j < size; j++) {
             if (j == i) {
                 a_matrix[i + j * size] = 2 * size + 1;
             } else {
@@ -37,79 +46,81 @@ double *init_a(int size) {
     return a_matrix;
 }
 
-void swap_pointers(double **board, double **new_board) {
-    double *temp = *board;
+void swap_pointers(ELEMENT **board, ELEMENT **new_board) {
+    ELEMENT *temp = *board;
     *board = *new_board;
     *new_board = temp;
 }
 
-__global__ void criterion(double *a, double *b, double *c) {
-    __shared__ double temp[THREADS_PER_BLOCK];
+__global__ void criterion(ELEMENT *a, ELEMENT *b, ELEMENT *c) {
+    __shared__ ELEMENT temp[THREADS_PER_BLOCK];
 
     *c = 0;
-    int index = threadIdx.x + blockIdx.x * blockDim.x;
-    double diff = a[index] - b[index];
+    unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
+    ELEMENT diff = a[index] - b[index];
     temp[threadIdx.x] = diff * diff;
 
     __syncthreads();
 
     if (0 == threadIdx.x) {
-        double sum = 0;
-        for (int i = 0; i < THREADS_PER_BLOCK; i++) {
+        ELEMENT sum = 0;
+        for (unsigned int i = 0; i < THREADS_PER_BLOCK; i++) {
             sum += temp[i];
         };
         atomicAdd(c, sum);
     }
 }
 
-__global__ void increment_x(double *x_new, double *x_old, double *a_mat,
-                            double *b_vec) {
-    int index = threadIdx.x + blockIdx.x * blockDim.x;
+__global__ void increment_x(ELEMENT *x_new, ELEMENT *x_old, ELEMENT *a_mat,
+                            ELEMENT *b_vec) {
+    unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
+    unsigned int indexN = N * index;
 
     if (index < N) {
-        double sum = 0;
-        for (int j = 0; j < N; j++) {
+        ELEMENT sum = 0;
+        for (unsigned int j = 0; j < N; j++) {
             if (index != j) {
-                sum += a_mat[index * N + j] * x_old[j];
+                sum += a_mat[indexN + j] * x_old[j];
             }
         }
-        x_new[index] = (b_vec[index] - sum) / a_mat[index * N + index];
+        x_new[index] = (b_vec[index] - sum) / a_mat[indexN + index];
     }
 }
 
-int solve_with_jacobi(double *x_init, double *a_mat, double *b_vec,
-                      double epsilon) {
-    int nit = 0;
-    double eps_2 = epsilon * epsilon;
-    double crit = eps_2 + 1;
+unsigned int solve_with_jacobi(ELEMENT *x_init, ELEMENT *a_mat, ELEMENT *b_vec,
+                               ELEMENT epsilon) {
+    unsigned int nit = 0;
+    ELEMENT eps_2 = epsilon * epsilon;
+    ELEMENT crit = eps_2 + 1;
 
-    double *dev_a, *dev_b, *dev_x_old, *dev_x_new, *dev_crit;
+    ELEMENT *dev_a, *dev_b, *dev_x_old, *dev_x_new, *dev_crit;
 
-    cudaMalloc((void **)&dev_a, N * N * sizeof(double));
-    cudaMalloc((void **)&dev_b, N * sizeof(double));
-    cudaMalloc((void **)&dev_x_old, N * sizeof(double));
-    cudaMalloc((void **)&dev_x_new, N * sizeof(double));
-    cudaMalloc((void **)&dev_crit, sizeof(double));
+    cudaMalloc((void **)&dev_a, N * N * sizeof(ELEMENT));
+    cudaMalloc((void **)&dev_b, N * sizeof(ELEMENT));
+    cudaMalloc((void **)&dev_x_old, N * sizeof(ELEMENT));
+    cudaMalloc((void **)&dev_x_new, N * sizeof(ELEMENT));
+    cudaMalloc((void **)&dev_crit, sizeof(ELEMENT));
 
     // copy inputs to device
-    cudaMemcpy(dev_a, a_mat, N * N * sizeof(double), cudaMemcpyHostToDevice);
-    cudaMemcpy(dev_b, b_vec, N * sizeof(double), cudaMemcpyHostToDevice);
-    cudaMemcpy(dev_x_old, x_init, N * sizeof(double), cudaMemcpyHostToDevice);
-    cudaMemcpy(dev_x_new, x_init, N * sizeof(double), cudaMemcpyHostToDevice);
-    cudaMemcpy(dev_crit, &crit, sizeof(double), cudaMemcpyHostToDevice);
+    cudaMemcpy(dev_a, a_mat, N * N * sizeof(ELEMENT), cudaMemcpyHostToDevice);
+    cudaMemcpy(dev_b, b_vec, N * sizeof(ELEMENT), cudaMemcpyHostToDevice);
+    cudaMemcpy(dev_x_old, x_init, N * sizeof(ELEMENT), cudaMemcpyHostToDevice);
+    cudaMemcpy(dev_x_new, x_init, N * sizeof(ELEMENT), cudaMemcpyHostToDevice);
+    cudaMemcpy(dev_crit, &crit, sizeof(ELEMENT), cudaMemcpyHostToDevice);
 
     while (crit > eps_2) {
-        increment_x<<<N / THREADS_PER_BLOCK, THREADS_PER_BLOCK>>>(
-            dev_x_new, dev_x_old, dev_a, dev_b);
-        criterion<<<N / THREADS_PER_BLOCK, THREADS_PER_BLOCK>>>(
-            dev_x_new, dev_x_old, dev_crit);
-
         swap_pointers(&dev_x_old, &dev_x_new);
-        cudaMemcpy(&crit, dev_crit, sizeof(double), cudaMemcpyDeviceToHost);
+
+        increment_x<<<N_BLOCKS, THREADS_PER_BLOCK>>>(dev_x_new, dev_x_old,
+                                                     dev_a, dev_b);
+        criterion<<<N_BLOCKS, THREADS_PER_BLOCK>>>(dev_x_new, dev_x_old,
+                                                   dev_crit);
+
+        cudaMemcpy(&crit, dev_crit, sizeof(ELEMENT), cudaMemcpyDeviceToHost);
         nit += 1;
     }
 
-    cudaMemcpy(x_init, dev_x_new, N * sizeof(double), cudaMemcpyDeviceToHost);
+    cudaMemcpy(x_init, dev_x_new, N * sizeof(ELEMENT), cudaMemcpyDeviceToHost);
 
     cudaFree(dev_a);
     cudaFree(dev_b);
@@ -121,30 +132,33 @@ int solve_with_jacobi(double *x_init, double *a_mat, double *b_vec,
 }
 
 int main(int argc, char *argv[]) {
-    int num_executions = 20;
+    unsigned int num_executions = 20;
 
-    int nit = 0;
-    double result = 0;
+    unsigned int nit = 0;
+    ELEMENT result = 0;
 
-    double eps = 1e-6;
+    ELEMENT eps = 1e-6;
 
-    double *a_mat = init_a(N);
-    double *x_init = init_x(N, 1);
-    double *b_vec = init_x(N, 6);
+    ELEMENT *a_mat = init_a(N);
+    ELEMENT *x_init = init_x(N, 1);
+    ELEMENT *b_vec = init_x(N, 6);
 
-    double *execution_times = (double *)malloc(sizeof(double) * num_executions);
+    ELEMENT *execution_times =
+        (ELEMENT *)malloc(sizeof(ELEMENT) * num_executions);
 
     struct timeval t1, t2;
-    double time = 0;
+    ELEMENT time = 0;
 
     printf(
         "running iterative Jacobi algorithm with size = "
         "%d\n",
         N);
 
-    for (int i = 0; i < num_executions; i++) {
-        double *x_solve = (double *)malloc(N * sizeof(double));
-        memcpy(x_solve, x_init, N * sizeof(double));
+    warm_up_gpu<<<N / THREADS_PER_BLOCK, THREADS_PER_BLOCK>>>();
+
+    for (unsigned int i = 0; i < num_executions; i++) {
+        ELEMENT *x_solve = (ELEMENT *)malloc(N * sizeof(ELEMENT));
+        memcpy(x_solve, x_init, N * sizeof(ELEMENT));
 
         gettimeofday(&t1, 0);
 
@@ -164,7 +178,7 @@ int main(int argc, char *argv[]) {
         free(x_solve);
     }
 
-    double avg_time = mean(execution_times, num_executions);
+    ELEMENT avg_time = mean(execution_times, num_executions);
 
     printf("number of iterations = %d \n", nit);
     printf("execution time = %.10fs \n", avg_time);
