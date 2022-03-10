@@ -5,7 +5,7 @@
 
 #define N 2048
 #define THREADS_PER_BLOCK 32
-#define N_BLOCKS (N / THREADS_PER_BLOCK)
+#define N_BLOCKS (N / THREADS_PER_BLOCK + 1)
 #define ELEMENT float
 
 __global__ void warm_up_gpu() {
@@ -57,17 +57,20 @@ __global__ void criterion(ELEMENT *a, ELEMENT *b, ELEMENT *c) {
 
     *c = 0;
     unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
-    ELEMENT diff = a[index] - b[index];
-    temp[threadIdx.x] = diff * diff;
 
-    __syncthreads();
+    if (index < N) {
+        ELEMENT diff = a[index] - b[index];
+        temp[threadIdx.x] = diff * diff;
 
-    if (0 == threadIdx.x) {
-        ELEMENT sum = 0;
-        for (unsigned int i = 0; i < THREADS_PER_BLOCK; i++) {
-            sum += temp[i];
-        };
-        atomicAdd(c, sum);
+        __syncthreads();
+
+        if (0 == threadIdx.x) {
+            ELEMENT sum = 0;
+            for (unsigned int i = 0; i < THREADS_PER_BLOCK; i++) {
+                sum += temp[i];
+            };
+            atomicAdd(c, sum);
+        }
     }
 }
 
@@ -110,16 +113,13 @@ unsigned int solve_with_jacobi(ELEMENT *x_init, ELEMENT *a_mat, ELEMENT *b_vec,
 
     while (crit > eps_2) {
         swap_pointers(&dev_x_old, &dev_x_new);
-
         increment_x<<<N_BLOCKS, THREADS_PER_BLOCK>>>(dev_x_new, dev_x_old,
                                                      dev_a, dev_b);
         criterion<<<N_BLOCKS, THREADS_PER_BLOCK>>>(dev_x_new, dev_x_old,
                                                    dev_crit);
-
         cudaMemcpy(&crit, dev_crit, sizeof(ELEMENT), cudaMemcpyDeviceToHost);
         nit += 1;
     }
-
     cudaMemcpy(x_init, dev_x_new, N * sizeof(ELEMENT), cudaMemcpyDeviceToHost);
 
     cudaFree(dev_a);
