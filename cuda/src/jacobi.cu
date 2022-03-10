@@ -37,10 +37,10 @@ double *init_a(int size) {
     return a_matrix;
 }
 
-void swap(double *&a, double *&b) {
-    double *temp = a;
-    a = b;
-    b = temp;
+void swap_pointers(double **board, double **new_board) {
+    double *temp = *board;
+    *board = *new_board;
+    *new_board = temp;
 }
 
 __global__ void criterion(double *a, double *b, double *c) {
@@ -104,7 +104,7 @@ int solve_with_jacobi(double *x_init, double *a_mat, double *b_vec,
         criterion<<<N / THREADS_PER_BLOCK, THREADS_PER_BLOCK>>>(
             dev_x_new, dev_x_old, dev_crit);
 
-        swap(dev_x_old, dev_x_new);
+        swap_pointers(&dev_x_old, &dev_x_new);
         cudaMemcpy(&crit, dev_crit, sizeof(double), cudaMemcpyDeviceToHost);
         nit += 1;
     }
