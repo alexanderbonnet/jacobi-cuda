@@ -91,7 +91,7 @@ __global__ void increment_x(ELEMENT *x_new, ELEMENT *x_old, ELEMENT *a_mat,
 }
 
 unsigned int solve_with_jacobi(ELEMENT *x_init, ELEMENT *a_mat, ELEMENT *b_vec,
-                               ELEMENT epsilon) {
+                               ELEMENT epsilon, unsigned int max_iters) {
     unsigned int nit = 0;
     ELEMENT eps_2 = epsilon * epsilon;
     ELEMENT crit = eps_2 + 1;
@@ -119,6 +119,9 @@ unsigned int solve_with_jacobi(ELEMENT *x_init, ELEMENT *a_mat, ELEMENT *b_vec,
                                                    dev_crit);
         cudaMemcpy(&crit, dev_crit, sizeof(ELEMENT), cudaMemcpyDeviceToHost);
         nit += 1;
+        if (nit > max_iters) {
+            crit = 0.0;
+        }
     }
     cudaMemcpy(x_init, dev_x_new, N * sizeof(ELEMENT), cudaMemcpyDeviceToHost);
 
@@ -133,6 +136,7 @@ unsigned int solve_with_jacobi(ELEMENT *x_init, ELEMENT *a_mat, ELEMENT *b_vec,
 
 int main(int argc, char *argv[]) {
     unsigned int num_executions = 20;
+    unsigned int max_iters = 1000;
 
     unsigned int nit = 0;
     ELEMENT result = 0;
@@ -162,7 +166,7 @@ int main(int argc, char *argv[]) {
 
         gettimeofday(&t1, 0);
 
-        nit = solve_with_jacobi(x_solve, a_mat, b_vec, eps);
+        nit = solve_with_jacobi(x_solve, a_mat, b_vec, eps, max_iters);
 
         cudaDeviceSynchronize();
         gettimeofday(&t2, 0);
