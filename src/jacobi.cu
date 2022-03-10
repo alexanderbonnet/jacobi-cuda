@@ -17,7 +17,7 @@ __global__ void warm_up_gpu() {
 
 ELEMENT mean(ELEMENT *x_array, int size) {
     ELEMENT mean = 0;
-    for (int i = 0; i < size; i++) {
+    for (unsigned int i = 0; i < size; i++) {
         mean += x_array[i];
     }
     mean = mean / size;
@@ -46,10 +46,10 @@ ELEMENT *init_a(unsigned int size) {
     return a_matrix;
 }
 
-void swap_pointers(ELEMENT **board, ELEMENT **new_board) {
-    ELEMENT *temp = *board;
-    *board = *new_board;
-    *new_board = temp;
+void swap_pointers(ELEMENT **a, ELEMENT **b) {
+    ELEMENT *temp = *a;
+    *a = *b;
+    *b = temp;
 }
 
 __global__ void criterion(ELEMENT *a, ELEMENT *b, ELEMENT *c) {
